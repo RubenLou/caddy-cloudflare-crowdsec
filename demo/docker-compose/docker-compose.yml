@@ -1,0 +1,28 @@
+services:
+  caddy:
+    image: monstr0/caddy-cloudflare-crowdsec:latest
+    container_name: caddy
+    restart: unless-stopped
+    ports:
+      - 80:80
+      - 443:443
+    environment:
+      - CF_API_TOKEN=${CF_API_TOKEN}
+      - CROWDSEC_LOCAL_API_KEY=${CROWDSEC_LOCAL_API_KEY}
+    volumes:
+      - ~/path/caddy/Caddyfile:/etc/caddy/Caddyfile
+      - ~/path/data/caddy:/data
+
+  crowdsec:
+    image: crowdsecurity/crowdsec:latest
+    container_name: crowdsec
+    ports:
+      - 8080:8080
+    environment:
+      - COLLECTIONS=crowdsecurity/caddy
+      - BOUNCER_KEY_CADDY=${CROWDSEC_LOCAL_API_KEY}
+    volumes:
+      - ~/path/crowdsec/config:/etc/crowdsec
+      - ~/path/crowdsec/data:/var/lib/crowdsec/data
+      - ~/path/crowdsec/acquis.d:/etc/crowdsec/acquis.d
+      - ~/path/caddy/log:/var/log/caddy:ro
