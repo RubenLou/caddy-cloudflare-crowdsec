@@ -26,53 +26,67 @@ jobs:
         username: ${{ env.DOCKER_HUB_USERNAME }}
         password: ${{ secrets.DOCKER_PASSWORD }}
 
-    - name: Restore versions.json from cache
-      uses: actions/cache@v2
-      with:
-        path: /tmp/versions.json
-        key: versions-file
+    - name: Get the previous versions.json artifact
+      run: |
+        # Get the list of all artifacts in the repository, sorted by updated_at
+        response=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+          "https://api.github.com/repos/${{ github.repository }}/actions/artifacts?per_page=100")
+        
+        # Filter for artifacts named "versions-json" and sort by "updated_at"
+        latest_artifact=$(echo "$response" | jq -c \
+          '[.artifacts[] | select(.name=="versions-json")] | sort_by(.updated_at) | last')
+        if [ "$latest_artifact" != "null" ]; then
+          # Extract the download URL and updated timestamp
+          archive_url=$(echo "$latest_artifact" | jq -r '.archive_download_url')
+          
+          curl -L -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -o versions-json.zip "$archive_url"
+          unzip versions-json.zip -d .
+          rm versions-json.zip
+        else
+          echo "No artifact found with name 'versions-json'."
+        fi
 
-    - name: Check for dependency updates
+    - name: Check for Dependency Updates
       run: |
         # Check latest commit hash for each dependency
         CADDY_CLOUDFLARE_LATEST=$(curl -s https://api.github.com/repos/caddy-dns/cloudflare/commits?per_page=1 | jq -r '.[0].sha')
         CADDY_CLOUDFLARE_IP_LATEST=$(curl -s https://api.github.com/repos/WeidiDeng/caddy-cloudflare-ip/commits?per_page=1 | jq -r '.[0].sha')
         CADDY_CROWDSEC_BOUNCER_LATEST=$(curl -s https://api.github.com/repos/hslatman/caddy-crowdsec-bouncer/commits?per_page=1 | jq -r '.[0].sha')
-        # Check the latest digest for caddy:latest
         CADDY_LATEST_DIGEST=$(curl -s https://hub.docker.com/v2/repositories/library/caddy/tags/latest | jq -r '.images[0].digest')
-        
-        # Read the last known commit versions
-        VERSIONS=$(cat /tmp/versions.json || echo "{}")
+
+        # Read the last known commit versions if available
+        VERSIONS=$(cat ./versions.json 2>/dev/null || echo "{}")
 
         # Read the last known commit hashes and digest
         PREV_CADDY_CLOUDFLARE=$(echo "$VERSIONS" | jq -r '.caddy_cloudflare')
         PREV_CADDY_CLOUDFLARE_IP=$(echo "$VERSIONS" | jq -r '.caddy_cloudflare_ip')
         PREV_CADDY_CROWDSEC_BOUNCER=$(echo "$VERSIONS" | jq -r '.caddy_crowdsec_bouncer')
         PREV_CADDY_LATEST_DIGEST=$(echo "$VERSIONS" | jq -r '.caddy_latest_digest')
-        
+
         # Compare current with previous versions
         CADDY_CLOUDFLARE_UPDATED=$( [ "$CADDY_CLOUDFLARE_LATEST" != "$PREV_CADDY_CLOUDFLARE" ] && echo true || echo false )
         CADDY_CLOUDFLARE_IP_UPDATED=$( [ "$CADDY_CLOUDFLARE_IP_LATEST" != "$PREV_CADDY_CLOUDFLARE_IP" ] && echo true || echo false )
         CROWDSEC_BOUNCER_UPDATED=$( [ "$CADDY_CROWDSEC_BOUNCER_LATEST" != "$PREV_CADDY_CROWDSEC_BOUNCER" ] && echo true || echo false )
         CADDY_UPDATED=$( [ "$CADDY_LATEST_DIGEST" != "$PREV_CADDY_LATEST_DIGEST" ] && echo true || echo false )
-        
-        # Check if versions file needs to be updated and update it
-        FILE_UPDATED=false
-        if [[ "$CADDY_CLOUDFLARE_UPDATED" == "true" || "$CADDY_CLOUDFLARE_IP_UPDATED" == "true" || "$CROWDSEC_BOUNCER_UPDATED" == "true" || "$CADDY_UPDATED" == "true" ]]; then
-            echo "{\"caddy_cloudflare\":\"$CADDY_CLOUDFLARE_LATEST\",\"caddy_cloudflare_ip\":\"$CADDY_CLOUDFLARE_IP_LATEST\",\"caddy_crowdsec_bouncer\":\"$CADDY_CROWDSEC_BOUNCER_LATEST\",\"caddy_latest_digest\":\"$CADDY_LATEST_DIGEST\"}" > /tmp/versions.json
-            FILE_UPDATED=true
-        fi
-        echo "FILE_UPDATED=$FILE_UPDATED" >> $GITHUB_ENV
 
-    - name: Push new image if different
-      if: env.FILE_UPDATED == 'true'
+        # Check if versions file was updated
+        if [[ "$CADDY_CLOUDFLARE_UPDATED" == "true" || "$CADDY_CLOUDFLARE_IP_UPDATED" == "true" || "$CROWDSEC_BOUNCER_UPDATED" == "true" || "$CADDY_UPDATED" == "true" ]]; then
+          echo "{\"caddy_cloudflare\":\"$CADDY_CLOUDFLARE_LATEST\",\"caddy_cloudflare_ip\":\"$CADDY_CLOUDFLARE_IP_LATEST\",\"caddy_crowdsec_bouncer\":\"$CADDY_CROWDSEC_BOUNCER_LATEST\",\"caddy_latest_digest\":\"$CADDY_LATEST_DIGEST\"}" > ./versions.json    
+          echo "file_updated=true" >> $GITHUB_ENV
+        else
+          echo "file_updated=false" >> $GITHUB_ENV
+        fi
+    
+    - name: Build docker image and push
+      if: env.file_updated == 'true'
       run: |
         VERSION=$(date +%Y%m%d%H%M)
         docker buildx build --tag ${{ env.DOCKER_HUB_USERNAME }}/${{ env.IMAGE_NAME }}:$VERSION --tag ${{ env.DOCKER_HUB_USERNAME }}/${{ env.IMAGE_NAME }}:latest --push .
-
-    - name: Save versions.json to cache
-      if: env.FILE_UPDATED == 'true'
-      uses: actions/cache@v2
+    
+    - name: Upload versions.json artifact
+      uses: actions/upload-artifact@v3
       with:
-        path: /tmp/versions.json
-        key: versions-file
+        name: versions-json
+        path: ./versions.json
+        retention-days: 2
