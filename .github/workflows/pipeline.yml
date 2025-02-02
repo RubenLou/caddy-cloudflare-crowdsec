@@ -4,6 +4,11 @@ on:
   schedule:
     - cron: '0 0 * * *'
   workflow_dispatch:  # Allow manual triggering of the workflow
+    inputs:
+      skip_version_check:
+        type: boolean
+        description: Skip previous version check
+        default: false
 
 env:
     DOCKER_HUB_USERNAME: monstr0
@@ -27,6 +32,7 @@ jobs:
         password: ${{ secrets.DOCKER_PASSWORD }}
 
     - name: Get the previous versions.json artifact
+      if: ${{ inputs.skip_version_check == false }}
       run: |
         # Get the list of all artifacts in the repository, sorted by updated_at
         response=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
@@ -85,7 +91,7 @@ jobs:
         docker buildx build --tag ${{ env.DOCKER_HUB_USERNAME }}/${{ env.IMAGE_NAME }}:$VERSION --tag ${{ env.DOCKER_HUB_USERNAME }}/${{ env.IMAGE_NAME }}:latest --push .
     
     - name: Upload versions.json artifact
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: versions-json
         path: ./versions.json
